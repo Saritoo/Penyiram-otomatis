@@ -6,38 +6,39 @@
 const int pinDHT = D3;  
 DHT dht(pinDHT, DHT22);
 // Pin untuk sensor kelembaban tanah 
-const int pinSoilMoisture = A0;  
+const int pinSoilMoisture = A0; 
+// Variabel Global untuk kelembaban
+static int previousSoilPercent = 0;
 // Pin untuk mengontrol relay
 const int pinRelay = D5;  
+//Variabel untuk menyimpan status pompa
+static bool pumpActive = false; 
+
 
 //------------ set Nilai Fuzzy ------------
 Fuzzy *fuzzy = new Fuzzy();
 
-// FuzzyInput Suhu
-FuzzySet *dingin = new FuzzySet(0, 0, 15, 25);
-FuzzySet *sedang = new FuzzySet(20, 25, 25, 30);
-FuzzySet *panas = new FuzzySet(25, 35, 60, 60);
+// Fungsi keanggotaan Suhu Input
+FuzzySet *cold = new FuzzySet(-10,-10, -10, 3);
+FuzzySet *cool = new FuzzySet(0, 3, 12, 15);
+FuzzySet *normal = new FuzzySet(12, 15, 24, 27);
+FuzzySet *warm = new FuzzySet(24, 27, 36, 39);
+FuzzySet *hot = new FuzzySet(36, 50, 50,50);
 
-// FuzzyInput Kelembaban tanah
-FuzzySet *kering = new FuzzySet(0, 0, 40, 60);
-FuzzySet *lembab = new FuzzySet(50, 65, 65, 80);
-FuzzySet *basah = new FuzzySet(70, 90, 100, 100);
+// Fungsi keanggotaan Kelembaban Input
+FuzzySet *dry = new FuzzySet(0,0,0, 20);
+FuzzySet *moist = new FuzzySet(10, 20, 40, 50);
+FuzzySet *wet = new FuzzySet(40, 70,70,70);
 
-// FuzzyInput Kelembaban Udara
-FuzzySet *rendah = new FuzzySet(0, 0, 40, 60);
-FuzzySet *biasa = new FuzzySet(50, 60, 60, 70);
-FuzzySet *tinggi = new FuzzySet(60, 80, 100, 100);
-
-// FuzzyOutput
-FuzzySet *sc = new FuzzySet(0, 0, 10, 20);   // Sangat Cepat
-FuzzySet *c = new FuzzySet(10, 20, 20, 30);   // Cepat
-FuzzySet *normal = new FuzzySet(20, 30, 30, 40);  // Normal
-FuzzySet *l = new FuzzySet(30, 40, 40, 50);   // Lama
-FuzzySet *sl = new FuzzySet(40, 50, 60, 60);  // Sangat Lama
+// Fungsi keanggotaan Lama Menyiram Output
+FuzzySet *off = new FuzzySet(0,0,0, 20);
+FuzzySet *cepat = new FuzzySet(0, 20,20, 28);
+FuzzySet *biasa = new FuzzySet(20, 28, 40, 48);
+FuzzySet *lama = new FuzzySet(40, 60,60,60);
 
 void setup() {
   Serial.begin(9600);
-  randomSeed(analogRead(0));
+  // randomSeed(analogRead(0));
   pinMode(pinRelay, OUTPUT);
   dht.begin();
   fuzzySetup();
@@ -53,471 +54,242 @@ void loop() {
 //----------- Membaca nilai dari Sensor -----------
     // Membaca nilai suhu dan kelembaban dari sensor DHT
   float temperature = dht.readTemperature();
-  float humidity = dht.readHumidity();
+  // float humidity = dht.readHumidity();
   // Membaca nilai kelembaban tanah dari sensor kelembaban tanah 
-  float soilMoisture = map(analogRead(pinSoilMoisture), 0, 1023, 0, 100); //konversi nilai 
-  int soilPercent = constrain(soilMoisture, 0, 100); //mengubah jadi nilai integer
+  float soilMoisture = map(analogRead(pinSoilMoisture), 0, 1300, 100, 0); //konversi nilai 
+  int soilPercent = constrain(soilMoisture, 100, 0); //mengubah jadi nilai integer
 
 //----------- Setingan input dan output fuzzy -----------
   fuzzy->setInput(1, temperature);
-  fuzzy->setInput(2, humidity);
-  fuzzy->setInput(3, soilPercent);
+  // fuzzy->setInput(2, humidity);
+  fuzzy->setInput(2, soilPercent);
   fuzzy->fuzzify();
   float output = fuzzy->defuzzify(1);
 
 //----------- Menampilkan hasil di Serial Monitor ------------
   Serial.print("Temperature: ");
   Serial.print(temperature);
-  Serial.print(" | Humidity: ");
-  Serial.print(humidity);
+  // Serial.print(" | Humidity: ");
+  // Serial.print(humidity);
   Serial.print(" | Soil Percent: ");
   Serial.print(soilPercent);
   Serial.print(" => Output: ");
   Serial.println(output);
-  pompa(output);
-  delay(1000);  
+
+
+  // Mengecek kondisi untuk mengatur pompa
+  if (soilPercent < 50) {
+    // Kelembaban masih rendah, nyalakan pompa dan perbarui status
+    pompa(output);  // mengaktifkan fuzzy untuk mengatur durasi pompa
+    pumpActive = true;
+    previousSoilPercent = soilPercent;
+    Serial.println(" | pompa active");
+  } else if (pumpActive && soilPercent >= previousSoilPercent) {
+    // Jika pompa aktif dan kelembaban meningkat atau tetap sama, matikan pompa
+    digitalWrite(pinRelay, LOW);
+    pumpActive = false;
+    Serial.println(" | Pump inactive");
+    
+  } else {
+    digitalWrite(pinRelay, LOW);
+    Serial.println(" | Pump inactive");
+  }
+  delay(1000);
 }
 //----------- Fungsi Mengatur Durasi Pompa -----------
 void pompa(float durasi) {
-  // Mengatur waktu minimal dan maksimal pompa (dalam detik)
   float min = 5.0;
   float max = 60.0;
-
-  // Mengonversi durasi fuzzy 
   int waktu = map(durasi, 0, 60, min, max);
 
-  // Menyalakan pompa
   digitalWrite(pinRelay, HIGH);
   Serial.print(" | Pump Duration: ");
   Serial.println(waktu);
 
-  // Menunggu selama durasi pompa
   delay(waktu * 1000);
 
-  // Mematikan pompa
   digitalWrite(pinRelay, LOW);
+  previousSoilPercent = analogRead(pinSoilMoisture);
+  Serial.print(" | Soil Percent: ");
+  Serial.print(previousSoilPercent);
 }
 
 void fuzzySetup () {
-  // FuzzyInput suhu
-  FuzzyInput *suhu = new FuzzyInput(1);
+ // FuzzyInput Suhu
+FuzzyInput *suhu = new FuzzyInput(1);
 
-  suhu->addFuzzySet(dingin);
-  suhu->addFuzzySet(sedang);
-  suhu->addFuzzySet(panas);
-  fuzzy->addFuzzyInput(suhu);
+suhu->addFuzzySet(cold);
+suhu->addFuzzySet(cool);
+suhu->addFuzzySet(normal);
+suhu->addFuzzySet(warm);
+suhu->addFuzzySet(hot);
+fuzzy->addFuzzyInput(suhu);
 
-  // FuzzyInput lembTanah
-  FuzzyInput *lembTanah = new FuzzyInput(2);
+// FuzzyInput Kelembaban Tanah
+FuzzyInput *kelembaban = new FuzzyInput(2);
 
-  lembTanah->addFuzzySet(kering);
-  lembTanah->addFuzzySet(lembab);
-  lembTanah->addFuzzySet(basah);
-  fuzzy->addFuzzyInput(lembTanah);
+kelembaban->addFuzzySet(dry);
+kelembaban->addFuzzySet(moist);
+kelembaban->addFuzzySet(wet);
+fuzzy->addFuzzyInput(kelembaban);
 
-  // FuzzyInput lembUdara
-  FuzzyInput *lembUdara = new FuzzyInput(3);
+// FuzzyOutput RELAY (Lama Menyiram)
+FuzzyOutput *durasi = new FuzzyOutput(1);
 
-  lembUdara->addFuzzySet(rendah);
-  lembUdara->addFuzzySet(biasa);
-  lembUdara->addFuzzySet(tinggi);
-  fuzzy->addFuzzyInput(lembUdara);
-
-  // FuzzyOutput RELAY (durasi)
-  FuzzyOutput *durasi = new FuzzyOutput(1);
-
-  durasi->addFuzzySet(sc);
-  durasi->addFuzzySet(c);
-  durasi->addFuzzySet(normal);
-  durasi->addFuzzySet(l);
-  durasi->addFuzzySet(sl);
-  fuzzy->addFuzzyOutput(durasi);
+durasi->addFuzzySet(off);
+durasi->addFuzzySet(cepat);
+durasi->addFuzzySet(biasa);
+durasi->addFuzzySet(lama);
+fuzzy->addFuzzyOutput(durasi);
   
 //----------------- FuzzyRule ---------------- 1
-  FuzzyRuleAntecedent *dingin_kering_1 = new FuzzyRuleAntecedent();
-  dingin_kering_1->joinWithAND(dingin, kering);
+  // FuzzyRule 1
+FuzzyRuleAntecedent *rule1Antecedent = new FuzzyRuleAntecedent();
+rule1Antecedent->joinWithAND(dry, cold);
 
-  FuzzyRuleAntecedent *c_rendah = new FuzzyRuleAntecedent();
-  c_rendah->joinSingle(rendah);
+FuzzyRuleConsequent *rule1Consequent = new FuzzyRuleConsequent();
+rule1Consequent->addOutput(biasa);
 
-  FuzzyRuleAntecedent *dingin_kering_rendah_1 = new FuzzyRuleAntecedent();
-  dingin_kering_rendah_1->joinWithAND(dingin_kering_1, c_rendah);
+FuzzyRule *fuzzyRule1 = new FuzzyRule(1, rule1Antecedent, rule1Consequent);
+fuzzy->addFuzzyRule(fuzzyRule1);
 
-  FuzzyRuleConsequent *c_1 = new FuzzyRuleConsequent();
-  c_1->addOutput(c);
-//  c_t_1->addOutput(t);
+// FuzzyRule 2
+FuzzyRuleAntecedent *rule2Antecedent = new FuzzyRuleAntecedent();
+rule2Antecedent->joinWithAND(dry, cool);
 
-  FuzzyRule *fuzzyRule1 = new FuzzyRule(1, dingin_kering_rendah_1, c_1);
-  fuzzy->addFuzzyRule(fuzzyRule1);
+FuzzyRuleConsequent *rule2Consequent = new FuzzyRuleConsequent();
+rule2Consequent->addOutput(lama);
 
-//----------------- FuzzyRule ---------------- 2
-  FuzzyRuleAntecedent *dingin_kering_2 = new FuzzyRuleAntecedent();
-  dingin_kering_2->joinWithAND(dingin, kering);
+FuzzyRule *fuzzyRule2 = new FuzzyRule(2, rule2Antecedent, rule2Consequent);
+fuzzy->addFuzzyRule(fuzzyRule2);
 
-  FuzzyRuleAntecedent *c_biasa = new FuzzyRuleAntecedent();
-  c_biasa->joinSingle(biasa);
+// FuzzyRule 3
+FuzzyRuleAntecedent *rule3Antecedent = new FuzzyRuleAntecedent();
+rule3Antecedent->joinWithAND(dry, normal);
 
-  FuzzyRuleAntecedent *dingin_kering_biasa_2 = new FuzzyRuleAntecedent();
-  dingin_kering_biasa_2->joinWithAND(dingin_kering_2, c_biasa);
+FuzzyRuleConsequent *rule3Consequent = new FuzzyRuleConsequent();
+rule3Consequent->addOutput(lama);
 
-  FuzzyRuleConsequent *c_2 = new FuzzyRuleConsequent();
-  c_2->addOutput(c);
-  //c_2->addOutput();
+FuzzyRule *fuzzyRule3 = new FuzzyRule(3, rule3Antecedent, rule3Consequent);
+fuzzy->addFuzzyRule(fuzzyRule3);
 
-  FuzzyRule *fuzzyRule2 = new FuzzyRule(2, dingin_kering_biasa_2, c_2);
-  fuzzy->addFuzzyRule(fuzzyRule2);
+// FuzzyRule 4
+FuzzyRuleAntecedent *rule4Antecedent = new FuzzyRuleAntecedent();
+rule4Antecedent->joinWithAND(dry, warm);
 
-//----------------- FuzzyRule ---------------- 3
-  FuzzyRuleAntecedent *dingin_kering_3 = new FuzzyRuleAntecedent();
-  dingin_kering_3->joinWithAND(dingin, kering);
+FuzzyRuleConsequent *rule4Consequent = new FuzzyRuleConsequent();
+rule4Consequent->addOutput(lama);
 
-  FuzzyRuleAntecedent *c_tinggi = new FuzzyRuleAntecedent();
-  c_tinggi->joinSingle(tinggi);
+FuzzyRule *fuzzyRule4 = new FuzzyRule(4, rule4Antecedent, rule4Consequent);
+fuzzy->addFuzzyRule(fuzzyRule4);
 
-  FuzzyRuleAntecedent *dingin_kering_tinggi_3 = new FuzzyRuleAntecedent();
-  dingin_kering_tinggi_3->joinWithAND(dingin_kering_3, c_tinggi);
+// FuzzyRule 5
+FuzzyRuleAntecedent *rule5Antecedent = new FuzzyRuleAntecedent();
+rule5Antecedent->joinWithAND(dry, hot);
 
-  FuzzyRuleConsequent *c_3 = new FuzzyRuleConsequent();
-  c_3->addOutput(c);
- // c_3->addOutput(r);
+FuzzyRuleConsequent *rule5Consequent = new FuzzyRuleConsequent();
+rule5Consequent->addOutput(lama);
 
-  FuzzyRule *fuzzyRule3 = new FuzzyRule(3, dingin_kering_tinggi_3, c_3);
-  fuzzy->addFuzzyRule(fuzzyRule3);
+FuzzyRule *fuzzyRule5 = new FuzzyRule(5, rule5Antecedent, rule5Consequent);
+fuzzy->addFuzzyRule(fuzzyRule5);
 
-//----------------- FuzzyRule ---------------- 4
-  FuzzyRuleAntecedent *dingin_lembab_4 = new FuzzyRuleAntecedent();
-  dingin_lembab_4->joinWithAND(dingin, lembab);
+// FuzzyRule 6
+FuzzyRuleAntecedent *rule6Antecedent = new FuzzyRuleAntecedent();
+rule6Antecedent->joinWithAND(moist, cold);
 
-  FuzzyRuleAntecedent *dingin_lembab_rendah_4 = new FuzzyRuleAntecedent();
-  dingin_lembab_rendah_4->joinWithAND(dingin_lembab_4, c_rendah);
+FuzzyRuleConsequent *rule6Consequent = new FuzzyRuleConsequent();
+rule6Consequent->addOutput(off);
 
-  FuzzyRuleConsequent *sc_4 = new FuzzyRuleConsequent();
-  sc_4->addOutput(sc);
-  //sc_4->addOutput(t);
+FuzzyRule *fuzzyRule6 = new FuzzyRule(6, rule6Antecedent, rule6Consequent);
+fuzzy->addFuzzyRule(fuzzyRule6);
 
-  FuzzyRule *fuzzyRule4 = new FuzzyRule(4, dingin_lembab_rendah_4, sc_4);
-  fuzzy->addFuzzyRule(fuzzyRule4);
+// FuzzyRule 7
+FuzzyRuleAntecedent *rule7Antecedent = new FuzzyRuleAntecedent();
+rule7Antecedent->joinWithAND(moist, cool);
 
-//----------------- FuzzyRule ---------------- 5
-  FuzzyRuleAntecedent *dingin_lembab_5 = new FuzzyRuleAntecedent();
-  dingin_lembab_5->joinWithAND(dingin, lembab);
+FuzzyRuleConsequent *rule7Consequent = new FuzzyRuleConsequent();
+rule7Consequent->addOutput(cepat);
 
-  FuzzyRuleAntecedent *dingin_lembab_biasa_5 = new FuzzyRuleAntecedent();
-  dingin_lembab_biasa_5->joinWithAND(dingin_lembab_5, c_biasa);
+FuzzyRule *fuzzyRule7 = new FuzzyRule(7, rule7Antecedent, rule7Consequent);
+fuzzy->addFuzzyRule(fuzzyRule7);
 
-  FuzzyRuleConsequent *sc_5 = new FuzzyRuleConsequent();
-  sc_5->addOutput(sc);
-  //sc_5->addOutput();
+// FuzzyRule 8
+FuzzyRuleAntecedent *rule8Antecedent = new FuzzyRuleAntecedent();
+rule8Antecedent->joinWithAND(moist, normal);
 
-  FuzzyRule *fuzzyRule5 = new FuzzyRule(5, dingin_lembab_biasa_5, sc_5);
-  fuzzy->addFuzzyRule(fuzzyRule5);
+FuzzyRuleConsequent *rule8Consequent = new FuzzyRuleConsequent();
+rule8Consequent->addOutput(cepat);
 
-//----------------- FuzzyRule ---------------- 6
-  FuzzyRuleAntecedent *dingin_lembab_6 = new FuzzyRuleAntecedent();
-  dingin_lembab_6->joinWithAND(dingin, lembab);
+FuzzyRule *fuzzyRule8 = new FuzzyRule(8, rule8Antecedent, rule8Consequent);
+fuzzy->addFuzzyRule(fuzzyRule8);
 
-  FuzzyRuleAntecedent *dingin_lembab_tinggi_6 = new FuzzyRuleAntecedent();
-  dingin_lembab_tinggi_6->joinWithAND(dingin_lembab_6, c_tinggi);
+// FuzzyRule 9
+FuzzyRuleAntecedent *rule9Antecedent = new FuzzyRuleAntecedent();
+rule9Antecedent->joinWithAND(moist, warm);
 
-  FuzzyRuleConsequent *sc_6 = new FuzzyRuleConsequent();
-  sc_6->addOutput(sc);
-  //sc_r_6->addOutput(r);
+FuzzyRuleConsequent *rule9Consequent = new FuzzyRuleConsequent();
+rule9Consequent->addOutput(biasa);
 
-  FuzzyRule *fuzzyRule6 = new FuzzyRule(6, dingin_lembab_tinggi_6, sc_6);
-  fuzzy->addFuzzyRule(fuzzyRule6);
+FuzzyRule *fuzzyRule9 = new FuzzyRule(9, rule9Antecedent, rule9Consequent);
+fuzzy->addFuzzyRule(fuzzyRule9);
 
-//----------------- FuzzyRule ---------------- 7
-  FuzzyRuleAntecedent *dingin_basah_7 = new FuzzyRuleAntecedent();
-  dingin_basah_7->joinWithAND(dingin, basah);
+// FuzzyRule 10
+FuzzyRuleAntecedent *rule10Antecedent = new FuzzyRuleAntecedent();
+rule10Antecedent->joinWithAND(moist, hot);
 
-  FuzzyRuleAntecedent *dingin_basah_rendah_7 = new FuzzyRuleAntecedent();
-  dingin_basah_rendah_7->joinWithAND(dingin_basah_7, c_rendah);
+FuzzyRuleConsequent *rule10Consequent = new FuzzyRuleConsequent();
+rule10Consequent->addOutput(biasa);
 
-  FuzzyRuleConsequent *sc_7 = new FuzzyRuleConsequent();
-  sc_7->addOutput(sc);
-  //sc_7->addOutput();
+FuzzyRule *fuzzyRule10 = new FuzzyRule(10, rule10Antecedent, rule10Consequent);
+fuzzy->addFuzzyRule(fuzzyRule10);
 
-  FuzzyRule *fuzzyRule7 = new FuzzyRule(7, dingin_basah_rendah_7, sc_7);
-  fuzzy->addFuzzyRule(fuzzyRule7);
+// FuzzyRule 11
+FuzzyRuleAntecedent *rule11Antecedent = new FuzzyRuleAntecedent();
+rule11Antecedent->joinWithAND(wet, cold);
 
-//----------------- FuzzyRule ---------------- 8
-  FuzzyRuleAntecedent *dingin_basah_8 = new FuzzyRuleAntecedent();
-  dingin_basah_8->joinWithAND(dingin, basah);
+FuzzyRuleConsequent *rule11Consequent = new FuzzyRuleConsequent();
+rule11Consequent->addOutput(off);
 
-  FuzzyRuleAntecedent *dingin_basah_biasa_8 = new FuzzyRuleAntecedent();
-  dingin_basah_biasa_8->joinWithAND(dingin_basah_8, c_biasa);
+FuzzyRule *fuzzyRule11 = new FuzzyRule(11, rule11Antecedent, rule11Consequent);
+fuzzy->addFuzzyRule(fuzzyRule11);
 
-  FuzzyRuleConsequent *sc_8 = new FuzzyRuleConsequent();
-  sc_8->addOutput(sc);
-  //sc_t_8->addOutput(t);
+// FuzzyRule 12
+FuzzyRuleAntecedent *rule12Antecedent = new FuzzyRuleAntecedent();
+rule12Antecedent->joinWithAND(wet, cool);
 
-  FuzzyRule *fuzzyRule8 = new FuzzyRule(8, dingin_basah_biasa_8, sc_8);
-  fuzzy->addFuzzyRule(fuzzyRule8);
+FuzzyRuleConsequent *rule12Consequent = new FuzzyRuleConsequent();
+rule12Consequent->addOutput(off);
 
-//----------------- FuzzyRule ---------------- 9
-  FuzzyRuleAntecedent *dingin_basah_9 = new FuzzyRuleAntecedent();
-  dingin_basah_9->joinWithAND(dingin, basah);
+FuzzyRule *fuzzyRule12 = new FuzzyRule(12, rule12Antecedent, rule12Consequent);
+fuzzy->addFuzzyRule(fuzzyRule12);
 
-  FuzzyRuleAntecedent *dingin_basah_tinggi_9 = new FuzzyRuleAntecedent();
-  dingin_basah_tinggi_9->joinWithAND(dingin_basah_9, c_tinggi);
+// FuzzyRule 13
+FuzzyRuleAntecedent *rule13Antecedent = new FuzzyRuleAntecedent();
+rule13Antecedent->joinWithAND(wet, normal);
 
-  FuzzyRuleConsequent *sc_9 = new FuzzyRuleConsequent();
-  sc_9->addOutput(sc);
-  //sc_9->addOutput();
+FuzzyRuleConsequent *rule13Consequent = new FuzzyRuleConsequent();
+rule13Consequent->addOutput(off);
 
-  FuzzyRule *fuzzyRule9 = new FuzzyRule(9, dingin_basah_tinggi_9, sc_9);
-  fuzzy->addFuzzyRule(fuzzyRule9);
+FuzzyRule *fuzzyRule13 = new FuzzyRule(13, rule13Antecedent, rule13Consequent);
+fuzzy->addFuzzyRule(fuzzyRule13);
 
-//----------------- FuzzyRule ---------------- 10
-  FuzzyRuleAntecedent *sedang_kering_10 = new FuzzyRuleAntecedent();
-  sedang_kering_10->joinWithAND(sedang, kering);
+// FuzzyRule 14
+FuzzyRuleAntecedent *rule14Antecedent = new FuzzyRuleAntecedent();
+rule14Antecedent->joinWithAND(wet, warm);
 
-  FuzzyRuleAntecedent *sedang_kering_rendah_10 = new FuzzyRuleAntecedent();
-  sedang_kering_rendah_10->joinWithAND(sedang_kering_10, c_rendah);
+FuzzyRuleConsequent *rule14Consequent = new FuzzyRuleConsequent();
+rule14Consequent->addOutput(off);
 
-  FuzzyRuleConsequent *normal_10 = new FuzzyRuleConsequent();
-  normal_10->addOutput(normal);
-//  normal_10->addOutput();
+FuzzyRule *fuzzyRule14 = new FuzzyRule(14, rule14Antecedent, rule14Consequent);
+fuzzy->addFuzzyRule(fuzzyRule14);
 
-  FuzzyRule *fuzzyRule10 = new FuzzyRule(10, sedang_kering_rendah_10, normal_10);
-  fuzzy->addFuzzyRule(fuzzyRule10);
+// FuzzyRule 15
+FuzzyRuleAntecedent *rule15Antecedent = new FuzzyRuleAntecedent();
+rule15Antecedent->joinWithAND(wet, hot);
 
-//----------------- FuzzyRule ---------------- 11
-  FuzzyRuleAntecedent *sedang_kering_11 = new FuzzyRuleAntecedent();
-  sedang_kering_11->joinWithAND(sedang, kering);
+FuzzyRuleConsequent *rule15Consequent = new FuzzyRuleConsequent();
+rule15Consequent->addOutput(off);
 
-  FuzzyRuleAntecedent *sedang_kering_biasa_11 = new FuzzyRuleAntecedent();
-  sedang_kering_biasa_11->joinWithAND(sedang_kering_11, c_biasa);
-
-  FuzzyRuleConsequent *normal_11 = new FuzzyRuleConsequent();
-  normal_11->addOutput(normal);
- // normal_11->addOutput(r);
-
-  FuzzyRule *fuzzyRule11 = new FuzzyRule(11, sedang_kering_biasa_11, normal_11);
-  fuzzy->addFuzzyRule(fuzzyRule11);
-
-//----------------- FuzzyRule ---------------- 12
-  FuzzyRuleAntecedent *sedang_kering_12 = new FuzzyRuleAntecedent();
-  sedang_kering_12->joinWithAND(sedang, kering);
-
-  FuzzyRuleAntecedent *sedang_kering_tinggi_12 = new FuzzyRuleAntecedent();
-  sedang_kering_tinggi_12->joinWithAND(sedang_kering_12, c_tinggi);
-
-  FuzzyRuleConsequent *normal_12 = new FuzzyRuleConsequent();
-  normal_12->addOutput(normal);
-//  normal_12->addOutput();
-
-  FuzzyRule *fuzzyRule12 = new FuzzyRule(12, sedang_kering_tinggi_12, normal_12);
-  fuzzy->addFuzzyRule(fuzzyRule12);
-
-//----------------- FuzzyRule ---------------- 13
-  FuzzyRuleAntecedent *sedang_lembab_13 = new FuzzyRuleAntecedent();
-  sedang_lembab_13->joinWithAND(sedang, lembab);
-  
-  FuzzyRuleAntecedent *sedang_lembab_rendah_13 = new FuzzyRuleAntecedent();
-  sedang_lembab_rendah_13->joinWithAND(sedang_lembab_13, c_rendah);
-
-  FuzzyRuleConsequent *sc_13 = new FuzzyRuleConsequent();
-  sc_13->addOutput(sc);
-//  sc_13->addOutput();
-
-  FuzzyRule *fuzzyRule13 = new FuzzyRule(13, sedang_lembab_rendah_13, sc_13);
-  fuzzy->addFuzzyRule(fuzzyRule13);
-
-//----------------- FuzzyRule ---------------- 14
-  FuzzyRuleAntecedent *sedang_lembab_14 = new FuzzyRuleAntecedent();
-  sedang_lembab_14->joinWithAND(sedang, lembab);
-
-  FuzzyRuleAntecedent *sedang_lembab_biasa_14 = new FuzzyRuleAntecedent();
-  sedang_lembab_biasa_14->joinWithAND(sedang_lembab_14, c_biasa );
-
-  FuzzyRuleConsequent *sc_14 = new FuzzyRuleConsequent();
-  sc_14->addOutput(sc);
-//  sc_14->addOutput();
-
-  FuzzyRule *fuzzyRule14 = new FuzzyRule(14, sedang_lembab_biasa_14, sc_14);
-  fuzzy->addFuzzyRule(fuzzyRule14);
-
-//----------------- FuzzyRule ---------------- 15
-  FuzzyRuleAntecedent *sedang_lembab_15 = new FuzzyRuleAntecedent();
-  sedang_lembab_15->joinWithAND(sedang, lembab);
-
-  FuzzyRuleAntecedent *sedang_lembab_tinggi_15 = new FuzzyRuleAntecedent();
-  sedang_lembab_tinggi_15->joinWithAND(sedang_lembab_15, c_tinggi);
-
-  FuzzyRuleConsequent *sc_15 = new FuzzyRuleConsequent();
-  sc_15->addOutput(sc);
-//  sc_15->addOutput();
-
-  FuzzyRule *fuzzyRule15 = new FuzzyRule(15, sedang_lembab_tinggi_15, sc_15);
-  fuzzy->addFuzzyRule(fuzzyRule15);
-
-//----------------- FuzzyRule ---------------- 16
-  FuzzyRuleAntecedent *sedang_basah_16 = new FuzzyRuleAntecedent();
-  sedang_basah_16->joinWithAND(sedang, basah);
-
-  FuzzyRuleAntecedent *sedang_basah_rendah_16 = new FuzzyRuleAntecedent();
-  sedang_basah_rendah_16->joinWithAND(sedang_basah_16, c_rendah);
-
-  FuzzyRuleConsequent *sc_16 = new FuzzyRuleConsequent();
-  sc_16->addOutput(sc);
-//  sc_16->addOutput();
-
-  FuzzyRule *fuzzyRule16 = new FuzzyRule(16, sedang_basah_rendah_16, sc_16);
-  fuzzy->addFuzzyRule(fuzzyRule16);
-
-//----------------- FuzzyRule ---------------- 17
-  FuzzyRuleAntecedent *sedang_basah_17 = new FuzzyRuleAntecedent();
-  sedang_basah_17->joinWithAND(sedang, basah);
-
-  FuzzyRuleAntecedent *sedang_basah_biasa_17 = new FuzzyRuleAntecedent();
-  sedang_basah_biasa_17->joinWithAND(sedang_basah_17, c_biasa);
-
-  FuzzyRuleConsequent *sc_17 = new FuzzyRuleConsequent();
-  sc_17->addOutput(sc);
-//  sc_r_17->addOutput(r);
-
-  FuzzyRule *fuzzyRule17 = new FuzzyRule(17, sedang_basah_biasa_17, sc_17);
-  fuzzy->addFuzzyRule(fuzzyRule17);
-
-//----------------- FuzzyRule ---------------- 18
-  FuzzyRuleAntecedent *sedang_basah_18 = new FuzzyRuleAntecedent();
-  sedang_basah_18->joinWithAND(sedang, basah);
-
-  FuzzyRuleAntecedent *sedang_basah_tinggi_18 = new FuzzyRuleAntecedent();
-  sedang_basah_tinggi_18->joinWithAND(sedang_basah_18, c_tinggi);
-
-  FuzzyRuleConsequent *sc_18 = new FuzzyRuleConsequent();
-  sc_18->addOutput(sc);
-//  sc_18->addOutput();
-
-  FuzzyRule *fuzzyRule18 = new FuzzyRule(18, sedang_basah_tinggi_18, sc_18);
-  fuzzy->addFuzzyRule(fuzzyRule18);
-
-//----------------- FuzzyRule ---------------- 19
-  FuzzyRuleAntecedent *panas_kering_19 = new FuzzyRuleAntecedent();
-  panas_kering_19->joinWithAND(panas, kering);
-
-  FuzzyRuleAntecedent *panas_kering_rendah_19 = new FuzzyRuleAntecedent();
-  panas_kering_rendah_19->joinWithAND(panas_kering_19, c_rendah);
-
-  FuzzyRuleConsequent *s_r_19 = new FuzzyRuleConsequent();
-  s_r_19->addOutput(sl);
-//  s_r_19->addOutput(r);
-
-  FuzzyRule *fuzzyRule19 = new FuzzyRule(19, panas_kering_rendah_19, s_r_19);
-  fuzzy->addFuzzyRule(fuzzyRule19);
-
-//----------------- FuzzyRule ---------------- 20
-  FuzzyRuleAntecedent *panas_kering_20 = new FuzzyRuleAntecedent();
-  panas_kering_20->joinWithAND(panas, kering);
-
-  FuzzyRuleAntecedent *panas_kering_biasa_20 = new FuzzyRuleAntecedent();
-  panas_kering_biasa_20->joinWithAND(panas_kering_20, c_biasa);
-
-  FuzzyRuleConsequent *s_20 = new FuzzyRuleConsequent();
-  s_20->addOutput(sl);
-//  s_20->addOutput();
-
-  FuzzyRule *fuzzyRule20 = new FuzzyRule(20, panas_kering_biasa_20, s_20);
-  fuzzy->addFuzzyRule(fuzzyRule20);
-
-//----------------- FuzzyRule ---------------- 21
-  FuzzyRuleAntecedent *panas_kering_21 = new FuzzyRuleAntecedent();
-  panas_kering_21->joinWithAND(panas, kering);
-
-  FuzzyRuleAntecedent *panas_kering_tinggi_21 = new FuzzyRuleAntecedent();
-  panas_kering_tinggi_21->joinWithAND(panas_kering_21, c_tinggi);
-
-  FuzzyRuleConsequent *s_21 = new FuzzyRuleConsequent();
-  s_21->addOutput(sl);
-//  s_21->addOutput();
-
-  FuzzyRule *fuzzyRule21 = new FuzzyRule(21, panas_kering_tinggi_21, s_21);
-  fuzzy->addFuzzyRule(fuzzyRule21);
-
-//----------------- FuzzyRule ---------------- 22
-  FuzzyRuleAntecedent *panas_lembab_22 = new FuzzyRuleAntecedent();
-  panas_lembab_22->joinWithAND(panas, lembab);
-
-  FuzzyRuleAntecedent *panas_lembab_rendah_22 = new FuzzyRuleAntecedent();
-  panas_lembab_rendah_22->joinWithAND(panas_lembab_22, c_rendah);
-
-  FuzzyRuleConsequent *l_22 = new FuzzyRuleConsequent();
-  l_22->addOutput(l);
-//  _t_22->addOutput(t);
-
-  FuzzyRule *fuzzyRule22 = new FuzzyRule(22, panas_lembab_rendah_22, l_22);
-  fuzzy->addFuzzyRule(fuzzyRule22);
-
-//----------------- FuzzyRule ---------------- 23
-  FuzzyRuleAntecedent *panas_lembab_23 = new FuzzyRuleAntecedent();
-  panas_lembab_23->joinWithAND(panas, lembab);
-
-  FuzzyRuleAntecedent *panas_lembab_biasa_23 = new FuzzyRuleAntecedent();
-  panas_lembab_biasa_23->joinWithAND(panas_lembab_23, c_biasa);
-
-  FuzzyRuleConsequent *l_23 = new FuzzyRuleConsequent();
-  l_23->addOutput(l);
-//  _r_23->addOutput(r);
-
-  FuzzyRule *fuzzyRule23 = new FuzzyRule(23, panas_lembab_biasa_23, l_23);
-  fuzzy->addFuzzyRule(fuzzyRule23);
-
-//----------------- FuzzyRule ---------------- 24
-  FuzzyRuleAntecedent *panas_lembab_24 = new FuzzyRuleAntecedent();
-  panas_lembab_24->joinWithAND(panas, lembab);
-
-  FuzzyRuleAntecedent *panas_lembab_tinggi_24 = new FuzzyRuleAntecedent();
-  panas_lembab_tinggi_24->joinWithAND(panas_lembab_24, c_tinggi);
-
-  FuzzyRuleConsequent *_24 = new FuzzyRuleConsequent();
-  _24->addOutput(l);
-//  _24->addOutput();
-
-  FuzzyRule *fuzzyRule24 = new FuzzyRule(24, panas_lembab_tinggi_24, _24);
-  fuzzy->addFuzzyRule(fuzzyRule24);
-
-//----------------- FuzzyRule ---------------- 25
-  FuzzyRuleAntecedent *panas_basah_25 = new FuzzyRuleAntecedent();
-  panas_basah_25->joinWithAND(panas, basah);
-
-  FuzzyRuleAntecedent *panas_basah_rendah_25 = new FuzzyRuleAntecedent();
-  panas_basah_rendah_25->joinWithAND(panas_basah_25, c_rendah);
-
-  FuzzyRuleConsequent *normal_25 = new FuzzyRuleConsequent();
-  normal_25->addOutput(normal);
-//  normal_25->addOutput();
-
-  FuzzyRule *fuzzyRule25 = new FuzzyRule(25, panas_basah_rendah_25, normal_25);
-  fuzzy->addFuzzyRule(fuzzyRule25);
-
-//----------------- FuzzyRule ---------------- 26
-  FuzzyRuleAntecedent *panas_basah_26 = new FuzzyRuleAntecedent();
-  panas_basah_26->joinWithAND(panas, basah);
-
-  FuzzyRuleAntecedent *panas_basah_biasa_26 = new FuzzyRuleAntecedent();
-  panas_basah_biasa_26->joinWithAND(panas_basah_26, c_biasa);
-
-  FuzzyRuleConsequent *normal_26 = new FuzzyRuleConsequent();
-  normal_26->addOutput(normal);
-//  normal_t_26->addOutput(t);
-
-  FuzzyRule *fuzzyRule26 = new FuzzyRule(26, panas_basah_biasa_26, normal_26);
-  fuzzy->addFuzzyRule(fuzzyRule26);
-
-//----------------- FuzzyRule ---------------- 27
-  FuzzyRuleAntecedent *panas_basah_27 = new FuzzyRuleAntecedent();
-  panas_basah_27->joinWithAND(panas, basah);
-
-  FuzzyRuleAntecedent *panas_basah_tinggi_27 = new FuzzyRuleAntecedent();
-  panas_basah_tinggi_27->joinWithAND(panas_basah_27, c_tinggi);
-
-  FuzzyRuleConsequent *normal_27 = new FuzzyRuleConsequent();
-  normal_27->addOutput(normal);
-//  normal_27->addOutput(r);
-
-  FuzzyRule *fuzzyRule27 = new FuzzyRule(27, panas_basah_tinggi_27, normal_27);
-  fuzzy->addFuzzyRule(fuzzyRule27);
-
-  }
+FuzzyRule *fuzzyRule15 = new FuzzyRule(15, rule15Antecedent, rule15Consequent);
+fuzzy->addFuzzyRule(fuzzyRule15);
+}
